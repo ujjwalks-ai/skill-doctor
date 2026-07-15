@@ -39,6 +39,8 @@ Deterministic (in `scripts/audit.py`, exact and repeatable):
 - Reference files — size, and whether a long one needs a table of contents
 - Routing depth — references that point to other references (chains break)
 - Weak pointers — "see `X.md`" with no *when* condition attached
+- Embedded code — large inline bash/python blocks that should be extracted to a
+  script the body routes to (the reconcile/deploy footgun)
 - Presence of `scripts/`, `references/`, `assets/`
 - Hardcoded secrets — Slack webhooks, AWS/GitHub/GitLab/Google/Stripe/OpenAI
   keys, private-key blocks, JWTs, credentials-in-URLs (error); generic
@@ -75,6 +77,17 @@ Or run the deterministic checks directly:
 ```bash
 python3 scripts/audit.py ~/.claude/skills/reconcile --json
 ```
+
+## Development
+
+Run the deterministic-check regression tests (stdlib only, no deps):
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+Fixtures live in `tests/fixtures/` and `examples/`; secret cases are built in
+temp dirs at runtime so no provider-format credential is ever committed.
 
 ## Roadmap
 

@@ -81,6 +81,11 @@ PLACEHOLDER_RE = re.compile(
 TEXT_EXTS = {".md", ".txt", ".rst", ".py", ".sh", ".bash", ".zsh", ".json",
              ".yaml", ".yml", ".env", ".cfg", ".ini", ".toml", ""}
 
+# Fenced code blocks whose language means "runnable" — candidates for scripts/.
+CODE_FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})\s*([A-Za-z0-9_+-]*)\s*$")
+EXEC_LANGS = {"bash", "sh", "shell", "zsh", "console", "shell-session",
+              "python", "py", "python3"}
+
 
 def finding(check, severity, message, detail=None):
     """severity: error | warn | info | ok"""
@@ -88,6 +93,45 @@ def finding(check, severity, message, detail=None):
     if detail is not None:
         f["detail"] = detail
     return f
+
+
+def scan_embedded_code(body):
+    """Flag inline bash/python that should live in scripts/. Deterministic code
+    embedded in the body is re-assembled by the model every run and can't be
+    tested — the reconcile/deploy footgun. Conservative on purpose: only
+    executable-language fences count, so example JSON/yaml never trips it."""
+    blocks, fence, lang, count = [], None, None, 0
+    for line in body.splitlines():
+        m = CODE_FENCE_RE.match(line)
+        if fence is None and m:
+            fence, lang, count = m.group(1)[0], (m.group(2) or "").lower(), 0
+        elif fence is not None and m and m.group(1)[0] == fence:
+            blocks.append((lang, count))
+            fence = None
+        elif fence is not None:
+            count += 1
+
+    exec_blocks = [(l, n) for l, n in blocks if l in EXEC_LANGS]
+    total = sum(n for _, n in exec_blocks)
+    biggest = max((n for _, n in exec_blocks), default=0)
+    n = len(exec_blocks)
+
+    if biggest >= 20 or total >= 50:
+        reasons = []
+        if biggest >= 20:
+            reasons.append(f"a single {biggest}-line block")
+        if total >= 50:
+            reasons.append(f"~{total} lines across {n} blocks")
+        return [finding("embedded-code", "warn",
+                        f"Inline executable code ({'; '.join(reasons)}) — deterministic steps belong in "
+                        "scripts/, not prose: the model re-assembles them each run and they can't be "
+                        "tested. Extract to a script the body routes to; keep the prose as the 'why'.")]
+    if total >= 25 and n >= 4:
+        return [finding("embedded-code", "info",
+                        f"~{total} lines of inline executable code across {n} blocks looks like a "
+                        "procedure. Consider moving the deterministic parts to scripts/.")]
+    return [finding("embedded-code", "ok",
+                    "No heavy inline code — the body isn't carrying a script.")]
 
 
 def scan_secrets(path):
@@ -309,6 +353,9 @@ def check_skill(path):
                 findings.append(finding("references", "warn",
                                         f"references/{fn} points at another reference file. Keep routing "
                                         "one level deep — chains break in ways that are hard to debug."))
+
+    # --- embedded-code check (should this be a script?) ---
+    findings.extend(scan_embedded_code(body))
 
     # --- secret / credential scan (whole skill folder) ---
     findings.extend(scan_secrets(path))
