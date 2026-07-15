@@ -90,6 +90,23 @@ Repo mode catches what a single-folder audit structurally can't: duplicate
 folder skill (stale copies), and skills whose trigger surfaces overlap so
 heavily they may compete to fire.
 
+### Run the real test — a paired eval
+
+The static audit can't tell you the skill *helps*. `scripts/eval.py` runs the
+paired eval automatically: it spawns fresh headless Claude contexts
+(`claude -p`) as trigger judges and as with-skill vs baseline pass agents,
+scores objective assertions, and reports **trigger rate and pass rate
+separately**. It is dry by design (agents emit what they *would* run; the
+harness disallows Bash/Edit/Write).
+
+```bash
+python3 scripts/eval.py examples/eval-reconcile.json --plan   # show the calls, cost nothing
+python3 scripts/eval.py examples/eval-reconcile.json          # actually run it
+```
+
+A spec lists the skill path, realistic positive/negative trigger prompts, and
+regex assertions for the pass check — see `examples/eval-reconcile.json`.
+
 ## Development
 
 Run the deterministic-check regression tests (stdlib only, no deps):
@@ -103,8 +120,9 @@ temp dirs at runtime so no provider-format credential is ever committed.
 
 ## Roadmap
 
-- **v1 (now):** static audit + recommendations, with paired-eval scaffolding
+- **v1:** static audit + recommendations, with paired-eval scaffolding — done
 - **v2:** run the paired eval harness — measure trigger rate and pass rate
+  separately (`scripts/eval.py`) — done
 - **v3:** the full loop — propose edits, re-measure against a baseline snapshot,
   iterate
 

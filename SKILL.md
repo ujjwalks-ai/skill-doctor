@@ -76,3 +76,9 @@ rate separately. Read `references/eval-harness.md` and generate, for the target:
 
 Present these so the user can run the real test next. Do not claim the skill is
 good on the strength of the static audit alone.
+
+If the user wants to actually run it, assemble the prompts and assertions into an
+eval spec (see `examples/eval-reconcile.json`) and run
+`python3 scripts/eval.py <spec>` — it spawns the trigger judges and with-skill vs
+baseline pass agents and reports trigger rate and pass rate separately. Use
+`--plan` first to preview the calls at no cost.

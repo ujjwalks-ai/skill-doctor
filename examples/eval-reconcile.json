@@ -1,0 +1,34 @@
+{
+  "_comment": "Sample paired-eval spec. Edit skill_path to your local reconcile skill. Run: python3 scripts/eval.py examples/eval-reconcile.json --plan  (then drop --plan to actually run).",
+  "skill_path": "/Users/ujjwal/.claude/skills/reconcile",
+  "model": "claude-sonnet-4-6",
+  "runs": 3,
+  "decoys": [
+    {"name": "pipeline-review", "description": "Run the full sync pipeline for companies, review each step, check reconciliation, verify staging promotion. Use when asked to sync, run pipeline, check sync status, debug sync failures, or verify data quality."},
+    {"name": "debug-consolidation-mapping", "description": "Use when debugging consolidation mapping issues — unmapped accounts, wrong hierarchy, child accounts losing mapped_account data, phantom changes, LINK vs CREATE action bugs."}
+  ],
+  "trigger": {
+    "positive": [
+      "Reconcile the last 10 companies and show me which are failing.",
+      "Why don't the QB and Cube totals match for Acme Corp?",
+      "Run a P&L reconciliation and generate a failure report.",
+      "Check match rates across all companies.",
+      "Debug the cash-flow reconciliation for rf_id 9341453010670116."
+    ],
+    "negative": [
+      "What does reconciliation mean in accounting?",
+      "Reconcile my personal bank statement against my checkbook."
+    ]
+  },
+  "pass": [
+    {
+      "prompt": "Reconcile the last 10 companies and show me which are failing.",
+      "assert": [
+        {"desc": "triggers via recon.py trigger --limit 10", "pattern": "recon\\.py trigger.*--limit\\s*10"},
+        {"desc": "polls run status", "pattern": "recon\\.py status"},
+        {"desc": "views failures", "pattern": "recon\\.py failures"},
+        {"desc": "reuses a run_id", "pattern": "run[_ ]?id"}
+      ]
+    }
+  ]
+}
