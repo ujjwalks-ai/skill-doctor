@@ -110,6 +110,22 @@ python3 scripts/eval.py examples/eval-reconcile.json          # actually run it
 A spec lists the skill path, realistic positive/negative trigger prompts, and
 regex assertions for the pass check — see `examples/eval-reconcile.json`.
 
+### Close the loop — propose and validate a fix
+
+`scripts/iterate.py` is the v3 loop: it measures the gate, proposes a
+**description** fix drawn from the trigger prompts the skill actually missed,
+re-measures, and keeps the change only if positives improve and no negative
+starts false-firing. It only touches the description and only re-measures trigger
+(pass rate is body-driven). Nothing is written to the skill — the winning
+description is staged to `<skill>/SKILL.md.proposed` for you to review and apply.
+
+```bash
+python3 scripts/iterate.py examples/eval-reconcile.json --max-iters 2
+```
+
+Edits are drafted *from observed failures*, never from imagination, and every
+proposal is re-measured — the guard against the "model writes its own skill" trap.
+
 ## Development
 
 Run the deterministic-check regression tests (stdlib only, no deps):
@@ -126,8 +142,8 @@ temp dirs at runtime so no provider-format credential is ever committed.
 - **v1:** static audit + recommendations, with paired-eval scaffolding — done
 - **v2:** run the paired eval harness — measure trigger rate and pass rate
   separately (`scripts/eval.py`) — done
-- **v3:** the full loop — propose edits, re-measure against a baseline snapshot,
-  iterate
+- **v3:** the full loop — propose a description fix from observed trigger misses,
+  re-measure, keep it only if it helps (`scripts/iterate.py`) — done
 
 ## Credit
 
