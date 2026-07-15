@@ -138,8 +138,13 @@ def scan_secrets(path):
     """Walk the skill's text files for hardcoded credentials. Secrets are redacted
     in the returned findings so the report never re-echoes them."""
     findings = []
+    # Skip dev/VCS dirs that aren't part of the skill surface (SKILL.md +
+    # scripts/references/assets). Notably `tests/` may hold secret-shaped
+    # fixtures by design.
+    skip_dirs = {".git", "__pycache__", "node_modules", "tests", "test",
+                 ".pytest_cache", ".venv", "venv", "dist", "build"}
     for root, dirs, files in os.walk(path):
-        dirs[:] = [d for d in dirs if d not in (".git", "__pycache__", "node_modules")]
+        dirs[:] = [d for d in dirs if d not in skip_dirs]
         for fn in sorted(files):
             if os.path.splitext(fn)[1].lower() not in TEXT_EXTS:
                 continue
