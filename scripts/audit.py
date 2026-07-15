@@ -86,6 +86,13 @@ CODE_FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})\s*([A-Za-z0-9_+-]*)\s*$")
 EXEC_LANGS = {"bash", "sh", "shell", "zsh", "console", "shell-session",
               "python", "py", "python3"}
 
+# For repo-level trigger-overlap: significant words in a description.
+STOPWORDS = frozenset(
+    "the a an to of for and or use used when this that with any all into onto "
+    "any use invoke asked ask user users about via them then than only just "
+    "you your it its is are be do does after before if whenever while once".split()
+)
+
 
 def finding(check, severity, message, detail=None):
     """severity: error | warn | info | ok"""
@@ -400,11 +407,153 @@ def print_text(summary, findings):
     print(f"  {summary['note']}\n")
 
 
+def _load_meta(skill_md_path):
+    try:
+        with open(skill_md_path, encoding="utf-8", errors="replace") as fh:
+            fm, _ = parse_frontmatter(fh.read())
+    except OSError:
+        return None, None
+    fm = fm or {}
+    return fm.get("name"), fm.get("description")
+
+
+def discover_skills(repo):
+    """Find skills at the top level of a repo: `<dir>/SKILL.md` folder skills and
+    loose `<name>.md` files carrying skill frontmatter (the stale-copy pattern)."""
+    skills = []
+    for entry in sorted(os.listdir(repo)):
+        full = os.path.join(repo, entry)
+        if os.path.isdir(full):
+            smd = os.path.join(full, "SKILL.md")
+            if os.path.isfile(smd):
+                name, desc = _load_meta(smd)
+                skills.append({"name": name or entry, "kind": "folder",
+                               "path": full, "basename": entry, "description": desc or ""})
+        elif entry.endswith(".md") and entry != "SKILL.md":
+            name, desc = _load_meta(full)
+            if name and desc:  # frontmatter with name+description → a loose skill file
+                skills.append({"name": name, "kind": "loose", "path": full,
+                               "basename": entry[:-3], "description": desc})
+    return skills
+
+
+def _trigger_tokens(desc):
+    return {w for w in re.findall(r"[a-z][a-z0-9-]{2,}", desc.lower()) if w not in STOPWORDS}
+
+
+def cross_checks(skills):
+    findings = []
+
+    # 1. Duplicate name — the loader cannot disambiguate.
+    by_name = {}
+    for s in skills:
+        by_name.setdefault(s["name"], []).append(s)
+    for name, group in sorted(by_name.items()):
+        if len(group) > 1:
+            locs = ", ".join(f"{g['kind']}:{g['basename']}" for g in group)
+            findings.append(finding("duplicate-name", "error",
+                                    f"{len(group)} skills share name '{name}' ({locs}) — the loader "
+                                    "cannot disambiguate. Keep one; rename or delete the rest."))
+
+    # 2. Loose file shadowing a folder skill — usually a superseded copy.
+    folder_keys = {s["basename"] for s in skills if s["kind"] == "folder"} | \
+                  {s["name"] for s in skills if s["kind"] == "folder"}
+    for s in skills:
+        if s["kind"] == "loose" and (s["basename"] in folder_keys or s["name"] in folder_keys):
+            findings.append(finding("shadow-copy", "warn",
+                                    f"Loose file {s['basename']}.md shadows a folder skill of the same "
+                                    "name — likely a superseded copy. Confirm which is current and "
+                                    "remove the stale one."))
+
+    # 3. Highly overlapping trigger surfaces — may compete to fire.
+    toks = [(s, _trigger_tokens(s["description"])) for s in skills]
+    for i in range(len(toks)):
+        for j in range(i + 1, len(toks)):
+            (sa, ta), (sb, tb) = toks[i], toks[j]
+            if sa["name"] == sb["name"] or not ta or not tb:
+                continue
+            inter, union = ta & tb, ta | tb
+            jac = len(inter) / len(union) if union else 0
+            if jac >= 0.5:
+                findings.append(finding("trigger-overlap", "info",
+                                        f"'{sa['name']}' and '{sb['name']}' overlap {int(jac*100)}% on "
+                                        f"trigger words ({', '.join(sorted(inter)[:6])}). A bare request "
+                                        "may load either — ensure a distinguishing word separates them."))
+    return findings
+
+
+def audit_repo(repo):
+    if not os.path.isdir(repo):
+        return None, [finding("target", "error", f"Not a directory: {repo}")]
+    skills = discover_skills(repo)
+    per_skill = []
+    for s in skills:
+        if s["kind"] == "folder":
+            summ, _ = check_skill(s["path"])
+            errs = summ["errors"] if summ else 1
+            warns = summ["warnings"] if summ else 0
+        else:
+            errs = warns = 0  # loose files are covered by the cross-checks
+        per_skill.append({"name": s["name"], "kind": s["kind"],
+                          "path": os.path.relpath(s["path"], repo),
+                          "errors": errs, "warnings": warns})
+    cross = cross_checks(skills)
+    summary = {
+        "repo": repo,
+        "skills": len(skills),
+        "cross_errors": sum(1 for f in cross if f["severity"] == "error"),
+        "cross_warnings": sum(1 for f in cross if f["severity"] == "warn"),
+        "skill_errors": sum(p["errors"] for p in per_skill),
+        "skill_warnings": sum(p["warnings"] for p in per_skill),
+    }
+    return summary, {"per_skill": per_skill, "cross_findings": cross}
+
+
+def print_repo_text(summary, payload):
+    icon = {"error": "✗", "warn": "!", "info": "·", "ok": "✓"}
+    order = {"error": 0, "warn": 1, "info": 2, "ok": 3}
+    print(f"\nskill-doctor · repo audit · {summary['repo']}")
+    print("=" * 60)
+    print(f"{summary['skills']} skills found\n")
+    print("Cross-skill findings:")
+    cross = sorted(payload["cross_findings"], key=lambda x: order[x["severity"]])
+    if cross:
+        for f in cross:
+            print(f"  {icon[f['severity']]} [{f['check']}] {f['message']}")
+    else:
+        print("  ✓ none")
+    print("\nPer-skill:")
+    for p in sorted(payload["per_skill"], key=lambda x: (-x["errors"], -x["warnings"], x["name"])):
+        flag = "" if (p["errors"] or p["warnings"]) else " ✓"
+        print(f"  {p['name']:<28} {p['kind']:<7} {p['errors']} err · {p['warnings']} warn{flag}")
+    print("-" * 60)
+    print(f"  cross: {summary['cross_errors']} err · {summary['cross_warnings']} warn   "
+          f"skills: {summary['skill_errors']} err · {summary['skill_warnings']} warn")
+    print("  Static checks only — run paired evals for the skills that matter.\n")
+
+
 def main():
     ap = argparse.ArgumentParser(description="Deterministic static checks for a Claude Code skill.")
-    ap.add_argument("path", help="path to the skill folder (containing SKILL.md)")
+    ap.add_argument("path", help="path to a skill folder, or a directory of skills with --repo")
     ap.add_argument("--json", action="store_true", help="emit structured JSON instead of text")
+    ap.add_argument("--repo", action="store_true",
+                    help="treat PATH as a directory of skills: run cross-skill checks + audit each")
     args = ap.parse_args()
+
+    if args.repo:
+        summary, payload = audit_repo(args.path)
+        if summary is None:
+            if args.json:
+                print(json.dumps({"summary": None, "findings": payload}, indent=2))
+            else:
+                for f in payload:
+                    print(f"ERROR [{f['check']}] {f['message']}", file=sys.stderr)
+            sys.exit(1)
+        if args.json:
+            print(json.dumps({"summary": summary, **payload}, indent=2))
+        else:
+            print_repo_text(summary, payload)
+        sys.exit(0)
 
     summary, findings = check_skill(args.path)
     if summary is None:

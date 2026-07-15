@@ -78,6 +78,18 @@ Or run the deterministic checks directly:
 python3 scripts/audit.py ~/.claude/skills/reconcile --json
 ```
 
+Audit an entire skills directory at once — cross-skill checks plus a per-skill
+roll-up:
+
+```bash
+python3 scripts/audit.py ~/.claude/skills --repo
+```
+
+Repo mode catches what a single-folder audit structurally can't: duplicate
+`name:` frontmatter (loader ambiguity), loose `<name>.md` files shadowing a
+folder skill (stale copies), and skills whose trigger surfaces overlap so
+heavily they may compete to fire.
+
 ## Development
 
 Run the deterministic-check regression tests (stdlib only, no deps):
@@ -101,6 +113,8 @@ temp dirs at runtime so no provider-format credential is ever committed.
 The evaluation model is drawn from *The Art of Writing Skills* (three-tier
 loading, the delta rule, description-as-gate, paired evaluation). skill-doctor
 is an attempt to make that field guide runnable.
+
+**Get the book → [The Art of Writing Skills](https://topmate.io/ujjwal_k_singh/2199504?utm_source=public_profile&utm_campaign=ujjwal_k_singh)**
 
 ## License
 

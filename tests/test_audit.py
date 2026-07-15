@@ -91,5 +91,28 @@ class TestSecretScanner(unittest.TestCase):
         self.assertFalse(has(f, "secret"))
 
 
+class TestRepoMode(unittest.TestCase):
+    REPO = os.path.join(HERE, "fixtures", "repo")
+
+    def test_discovers_folder_and_loose_skills(self):
+        found = sorted((s["name"], s["kind"]) for s in audit.discover_skills(self.REPO))
+        self.assertIn(("alpha", "folder"), found)
+        self.assertIn(("alpha", "loose"), found)
+        self.assertIn(("beta", "folder"), found)
+
+    def test_duplicate_name_is_error(self):
+        _, payload = audit.audit_repo(self.REPO)
+        self.assertTrue(any(f["check"] == "duplicate-name" and f["severity"] == "error"
+                            for f in payload["cross_findings"]))
+
+    def test_shadow_copy_warns(self):
+        _, payload = audit.audit_repo(self.REPO)
+        self.assertTrue(has(payload["cross_findings"], "shadow-copy", "warn"))
+
+    def test_trigger_overlap_flagged(self):
+        _, payload = audit.audit_repo(self.REPO)
+        self.assertTrue(has(payload["cross_findings"], "trigger-overlap", "info"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
