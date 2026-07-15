@@ -31,10 +31,24 @@ REF_TOC_LINES = 200            # a reference past this should carry a table of c
 CHARS_PER_TOKEN = 4            # rough token estimate; deterministic, not exact
 
 NAME_RE = re.compile(r"^[a-z0-9-]+$")
-# A pointer to a bundled file (references/foo.md, scripts/bar.py, ./baz.md, foo.md)
-POINTER_RE = re.compile(r"(references/|scripts/|assets/|\./)?[\w-]+\.(md|py|sh|txt|json|ya?ml)")
-# Words that turn a pointer from a footnote into a trigger.
-CONDITION_WORDS = re.compile(r"\b(before|after|if|when|whenever|unless|while|once|for any|for each)\b", re.I)
+# A "read this doc" pointer — reference documentation the agent is told to read.
+# Deliberately limited to doc extensions: a script or asset invocation
+# (`python3 scripts/x.py …`) is a command to run, not a footnote to read, and
+# must never be flagged as a weak pointer.
+DOC_POINTER_RE = re.compile(r"(references/|\./)?[\w./-]+\.(md|txt|rst)\b")
+# A pointer that is really a command being run, not a document being read.
+EXEC_CONTEXT_RE = re.compile(r"\b(python3?|node|deno|bash|sh|ruby|npx|pnpm|yarn)\b|(\./)")
+# Verbs that introduce a *passive footnote* pointer ("see X.md", "refer to X").
+# An imperative "Read X.md" is a directive, not a footnote, so it is not flagged;
+# the smell this catches is the optional-sounding aside with no trigger.
+POINTER_VERB_RE = re.compile(r"\b(see|refer to)\b", re.I)
+# Phrasings that turn a pointer from a footnote into a trigger — a WHEN clause
+# ("before …", "if …") or a purpose clause ("to debug …", "to understand …").
+CONDITION_WORDS = re.compile(
+    r"\b(before|after|if|when|whenever|unless|while|once|for any|for each|"
+    r"to (understand|debug|find|resolve|investigate|diagnose|trace|see|check|know|learn|get|dig))\b",
+    re.I,
+)
 
 
 def finding(check, severity, message, detail=None):
@@ -185,12 +199,18 @@ def check_skill(path):
                                 f"Body is {body_lines} lines / ~{body_tokens} tokens — within budget."))
 
     # --- weak pointers in the body ---
+    # A weak pointer is a documentation reference the agent is told to read with
+    # no WHEN/purpose clause. Command invocations (`python3 scripts/x.py …`) and
+    # non-doc files are commands, not read-pointers, so they are excluded.
     for i, line in enumerate(body.splitlines(), 1):
-        if POINTER_RE.search(line) and re.search(r"\b(see|refer to|check)\b", line, re.I) \
-                and not CONDITION_WORDS.search(line):
+        if (DOC_POINTER_RE.search(line)
+                and POINTER_VERB_RE.search(line)
+                and not CONDITION_WORDS.search(line)
+                and not EXEC_CONTEXT_RE.search(line)):
             findings.append(finding("routing", "warn",
-                                    f"Weak pointer (line {i}): a file reference with no WHEN condition "
-                                    "reads as a footnote. Attach a trigger (read X *before* …, *if* …).",
+                                    f"Weak pointer (line {i}): a documentation reference with no WHEN "
+                                    "condition reads as a footnote. Attach a trigger (read X *before* …, "
+                                    "*if* …, *to debug* …).",
                                     detail=line.strip()))
 
     # --- supporting folders ---
