@@ -36,8 +36,13 @@ import re
 import subprocess
 import sys
 
-# Tools the headless agents may never use — enforces a dry run at the harness layer.
-DRY_DISALLOW = ["Bash", "Edit", "Write", "NotebookEdit"]
+# Tools the headless agents may never use. Bash/Edit/Write keep the run dry.
+# Skill/Read/Glob/Grep/Task are disallowed so the baseline arm can't load the
+# globally-installed skill (claude -p auto-loads ~/.claude/skills) or read it off
+# disk — otherwise "without skill" isn't actually without the skill. Both arms get
+# their only skill knowledge from what the harness injects into the prompt.
+DRY_DISALLOW = ["Bash", "Edit", "Write", "NotebookEdit",
+                "Skill", "Task", "Read", "Glob", "Grep", "WebFetch", "WebSearch"]
 DEFAULT_MODEL = "claude-sonnet-4-6"
 
 
