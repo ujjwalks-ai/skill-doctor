@@ -50,6 +50,37 @@ CONDITION_WORDS = re.compile(
     re.I,
 )
 
+# --- Secret / credential detection -------------------------------------------
+# A hardcoded credential in a skill leaks the moment the folder is shared,
+# committed, or synced. High-confidence formats are errors; generic key=value
+# assignments are warnings (more false-positive prone). Matched values are
+# always redacted in the output so the report never re-echoes the secret.
+HIGH_CONFIDENCE_SECRETS = [
+    ("Slack incoming webhook", re.compile(r"https://hooks\.slack\.com/services/[A-Za-z0-9_/+-]+")),
+    ("AWS access key id", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
+    ("GitHub token", re.compile(r"\bgh[posru]_[A-Za-z0-9]{30,}\b")),
+    ("GitLab PAT", re.compile(r"\bglpat-[A-Za-z0-9_-]{20,}\b")),
+    ("Google API key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b")),
+    ("Stripe live key", re.compile(r"\b[sr]k_live_[0-9a-zA-Z]{16,}\b")),
+    ("OpenAI-style key", re.compile(r"\bsk-[A-Za-z0-9]{20,}\b")),
+    ("Slack API token", re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b")),
+    ("private key block", re.compile(r"-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----")),
+    ("JSON Web Token", re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{6,}\b")),
+    ("credentials in URL", re.compile(r"\b[a-z][a-z0-9+.\-]*://[^/\s:@]+:[^/\s@]{3,}@")),
+]
+GENERIC_SECRET = re.compile(
+    r"(?i)\b(api[_-]?key|secret|token|password|passwd|pwd|access[_-]?key|client[_-]?secret)\b"
+    r"\s*[:=]\s*[\"']?([A-Za-z0-9/_+.\-]{16,})[\"']?"
+)
+# Values that are obviously placeholders, not real secrets.
+PLACEHOLDER_RE = re.compile(
+    r"(?i)(your|example|redacted|placeholder|changeme|dummy|sample|xxxx|\.\.\.|"
+    r"<[^>]+>|\$\{?[a-z_][a-z0-9_]*\}?|foo|bar)"
+)
+# File types worth scanning for secrets (text only).
+TEXT_EXTS = {".md", ".txt", ".rst", ".py", ".sh", ".bash", ".zsh", ".json",
+             ".yaml", ".yml", ".env", ".cfg", ".ini", ".toml", ""}
+
 
 def finding(check, severity, message, detail=None):
     """severity: error | warn | info | ok"""
@@ -57,6 +88,45 @@ def finding(check, severity, message, detail=None):
     if detail is not None:
         f["detail"] = detail
     return f
+
+
+def scan_secrets(path):
+    """Walk the skill's text files for hardcoded credentials. Secrets are redacted
+    in the returned findings so the report never re-echoes them."""
+    findings = []
+    for root, dirs, files in os.walk(path):
+        dirs[:] = [d for d in dirs if d not in (".git", "__pycache__", "node_modules")]
+        for fn in sorted(files):
+            if os.path.splitext(fn)[1].lower() not in TEXT_EXTS:
+                continue
+            fp = os.path.join(root, fn)
+            try:
+                with open(fp, encoding="utf-8") as fh:
+                    text = fh.read()
+            except (UnicodeDecodeError, OSError):
+                continue
+            rel = os.path.relpath(fp, path)
+            for i, line in enumerate(text.splitlines(), 1):
+                hc_hit = False
+                for label, pat in HIGH_CONFIDENCE_SECRETS:
+                    m = pat.search(line)
+                    if m and "EXAMPLE" not in m.group(0).upper():
+                        hc_hit = True
+                        findings.append(finding(
+                            "secret", "error",
+                            f"Hardcoded {label} in {rel}:{i} — a credential in a skill leaks when the "
+                            "folder is shared, committed, or synced. Move it to an env var / secret "
+                            "and rotate it.",
+                            detail=line.replace(m.group(0), "«REDACTED»").strip()[:160]))
+                if not hc_hit:
+                    gm = GENERIC_SECRET.search(line)
+                    if gm and not PLACEHOLDER_RE.search(gm.group(2)):
+                        findings.append(finding(
+                            "secret", "warn",
+                            f"Possible hardcoded {gm.group(1).lower()} in {rel}:{i}. If it is a real "
+                            "credential move it to an env var; if a placeholder, ignore.",
+                            detail=line.replace(gm.group(2), "«REDACTED»").strip()[:160]))
+    return findings
 
 
 def parse_frontmatter(text):
@@ -239,6 +309,9 @@ def check_skill(path):
                 findings.append(finding("references", "warn",
                                         f"references/{fn} points at another reference file. Keep routing "
                                         "one level deep — chains break in ways that are hard to debug."))
+
+    # --- secret / credential scan (whole skill folder) ---
+    findings.extend(scan_secrets(path))
 
     summary = summarize(findings, name, folder)
     return summary, findings

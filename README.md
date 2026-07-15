@@ -40,6 +40,9 @@ Deterministic (in `scripts/audit.py`, exact and repeatable):
 - Routing depth — references that point to other references (chains break)
 - Weak pointers — "see `X.md`" with no *when* condition attached
 - Presence of `scripts/`, `references/`, `assets/`
+- Hardcoded secrets — Slack webhooks, AWS/GitHub/GitLab/Google/Stripe/OpenAI
+  keys, private-key blocks, JWTs, credentials-in-URLs (error); generic
+  `key = value` credentials (warn). Matched values are redacted in the report.
 
 Judgment (guided by `references/rubric.md`):
 
