@@ -44,7 +44,10 @@ Deterministic (in `scripts/audit.py`, exact and repeatable):
 - Presence of `scripts/`, `references/`, `assets/`
 - Hardcoded secrets — Slack webhooks, AWS/GitHub/GitLab/Google/Stripe/OpenAI
   keys, private-key blocks, JWTs, credentials-in-URLs (error); generic
-  `key = value` credentials (warn). Matched values are redacted in the report.
+  `key = value` credentials (warn). Matched values are redacted in the report;
+  localhost URLs, code/attribute references, and placeholders are not flagged.
+- Portability — hardcoded operator/home paths (`/Users/…`, `/home/…`) that break
+  when a teammate runs the skill (info)
 
 Judgment (guided by `references/rubric.md`):
 

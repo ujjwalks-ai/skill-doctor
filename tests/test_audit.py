@@ -91,6 +91,44 @@ class TestSecretScanner(unittest.TestCase):
         self.assertFalse(has(f, "secret"))
 
 
+class TestSecretPrecision(unittest.TestCase):
+    def _secret(self, body):
+        with tempfile.TemporaryDirectory() as tmp:
+            d = write_skill(tmp, "s", body)
+            _, f = run(d)
+        return f
+
+    def test_localhost_url_not_flagged(self):
+        self.assertFalse(has(self._secret("DB: postgresql://user:pass@localhost:5432/app"), "secret"))
+
+    def test_remote_url_still_flagged(self):
+        self.assertTrue(has(self._secret("DB: postgresql://user:pass@db.prod.example.com:5432/app"),
+                            "secret", "error"))
+
+    def test_code_reference_not_flagged(self):
+        # `var token = fbdb.tokens.findOne` is code, not a hardcoded secret
+        self.assertFalse(has(self._secret("var token = fbdb.tokens.findOne"), "secret"))
+
+    def test_attribute_reference_not_flagged(self):
+        # `.api_key` is an attribute access, not a key assignment
+        self.assertFalse(has(self._secret("configure client.api_key = someLongAttributeChainValue"), "secret"))
+
+    def test_real_generic_still_flagged(self):
+        self.assertTrue(has(self._secret("password = s3cr3tRealValue1234567"), "secret", "warn"))
+
+
+class TestPortability(unittest.TestCase):
+    def test_operator_path_flagged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d = write_skill(tmp, "p", "Run `/Users/bob/project/scripts/go.py --now` to start.")
+            _, f = run(d)
+        self.assertTrue(has(f, "portability", "info"))
+
+    def test_clean_fixture_has_no_operator_path(self):
+        _, f = run(os.path.join(HERE, "fixtures", "clean"))
+        self.assertFalse(has(f, "portability", "info"))
+
+
 class TestRepoMode(unittest.TestCase):
     REPO = os.path.join(HERE, "fixtures", "repo")
 

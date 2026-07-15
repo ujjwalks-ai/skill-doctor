@@ -69,9 +69,15 @@ HIGH_CONFIDENCE_SECRETS = [
     ("credentials in URL", re.compile(r"\b[a-z][a-z0-9+.\-]*://[^/\s:@]+:[^/\s@]{3,}@")),
 ]
 GENERIC_SECRET = re.compile(
-    r"(?i)\b(api[_-]?key|secret|token|password|passwd|pwd|access[_-]?key|client[_-]?secret)\b"
+    # not preceded by a word char or dot, so attribute refs like `posthog.api_key` don't match
+    r"(?i)(?<![\w.])(api[_-]?key|secret|token|password|passwd|pwd|access[_-]?key|client[_-]?secret)"
     r"\s*[:=]\s*[\"']?([A-Za-z0-9/_+.\-]{16,})[\"']?"
 )
+# A captured value that is really code — a dotted identifier / attribute or a call
+# chain like `fbdb.tokens.findOne`, not a hardcoded secret.
+CODE_REF_RE = re.compile(r"^\w+(?:\.\w+)+$")
+# Loopback / non-routable hosts — credentials pointing here aren't a leak.
+LOCAL_HOST_RE = re.compile(r"(localhost|127\.0\.0\.1|0\.0\.0\.0|\[?::1\]?|[\w-]+\.local)\b", re.I)
 # Values that are obviously placeholders, not real secrets.
 PLACEHOLDER_RE = re.compile(
     r"(?i)(your|example|redacted|placeholder|changeme|dummy|sample|xxxx|\.\.\.|"
@@ -141,6 +147,23 @@ def scan_embedded_code(body):
                     "No heavy inline code — the body isn't carrying a script.")]
 
 
+ABS_PATH_RE = re.compile(r"/(?:Users|home)/[^/\s\"'`]+/\S+")
+
+
+def scan_portability(body):
+    """Flag hardcoded operator/home paths in the body — brittle the moment a
+    teammate runs the skill. Info-level: fine for a personal skill, a smell for a
+    shared one."""
+    hits = [(i, m.group(0)) for i, line in enumerate(body.splitlines(), 1)
+            if (m := ABS_PATH_RE.search(line))]
+    if not hits:
+        return [finding("portability", "ok", "No hardcoded operator/home paths in the body.")]
+    ln, sample = hits[0]
+    return [finding("portability", "info",
+                    f"{len(hits)} hardcoded absolute path(s) — e.g. {sample[:48]} (line {ln}). Brittle "
+                    "if a teammate runs the skill; lift host/paths into a variable or env block.")]
+
+
 def scan_secrets(path):
     """Walk the skill's text files for hardcoded credentials. Secrets are redacted
     in the returned findings so the report never re-echoes them."""
@@ -166,17 +189,22 @@ def scan_secrets(path):
                 hc_hit = False
                 for label, pat in HIGH_CONFIDENCE_SECRETS:
                     m = pat.search(line)
-                    if m and "EXAMPLE" not in m.group(0).upper():
-                        hc_hit = True
-                        findings.append(finding(
-                            "secret", "error",
-                            f"Hardcoded {label} in {rel}:{i} — a credential in a skill leaks when the "
-                            "folder is shared, committed, or synced. Move it to an env var / secret "
-                            "and rotate it.",
-                            detail=line.replace(m.group(0), "«REDACTED»").strip()[:160]))
+                    if not m or "EXAMPLE" in m.group(0).upper():
+                        continue
+                    # credentials pointing at localhost aren't a leak
+                    if label == "credentials in URL" and LOCAL_HOST_RE.match(line[m.end():]):
+                        continue
+                    hc_hit = True
+                    findings.append(finding(
+                        "secret", "error",
+                        f"Hardcoded {label} in {rel}:{i} — a credential in a skill leaks when the "
+                        "folder is shared, committed, or synced. Move it to an env var / secret "
+                        "and rotate it.",
+                        detail=line.replace(m.group(0), "«REDACTED»").strip()[:160]))
                 if not hc_hit:
                     gm = GENERIC_SECRET.search(line)
-                    if gm and not PLACEHOLDER_RE.search(gm.group(2)):
+                    if gm and not PLACEHOLDER_RE.search(gm.group(2)) \
+                            and not CODE_REF_RE.match(gm.group(2)):
                         findings.append(finding(
                             "secret", "warn",
                             f"Possible hardcoded {gm.group(1).lower()} in {rel}:{i}. If it is a real "
@@ -368,6 +396,9 @@ def check_skill(path):
 
     # --- embedded-code check (should this be a script?) ---
     findings.extend(scan_embedded_code(body))
+
+    # --- portability check (hardcoded operator/home paths) ---
+    findings.extend(scan_portability(body))
 
     # --- secret / credential scan (whole skill folder) ---
     findings.extend(scan_secrets(path))
